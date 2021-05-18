@@ -1,0 +1,127 @@
+#  https://www.raspberrypi.org/documentation/rp2040/getting-started/
+#   hier findet ihr alles rund um den Pico 
+#  https://datasheets.raspberrypi.org/pico/raspberry-pi-pico-python-sdk.pdf
+#            Auf der Seite 22 findet hier einiges was ich verwendet habe, zum LED WS2812 Bausteins des LED Strips
+
+
+import array                    # Grund Module laden
+import math
+import rp2
+import machine 
+import utime
+led_anzahl = 100                   # Anzahl der LEDs auf dem Strip (im meinem Projekt 100)
+eingangsspannung= machine.ADC(26)  #Pegeleingang am Pico für das Audio Signal (Pin31)
+umrechnungsfaktor=led_anzahl/65535 # Pegelumrechnung auf LED Anzahl
+halte=4                            # Schleifenanzahl fur die Haltezeit des Max Pegels
+wert=0
+kf=1.05                            # Korrektion Factor für Eingangspegelspannung Anpassung, auch wenn ihr
+                                   # keinen  Vorverstärker einsetzt (4-6 für den ersten Test)
+rot =     (255,0,0)                # Farbfestlegung
+orange =  (255,69,0) 
+grün =    (0,255,0) 
+hellgrün =(0,250,50)
+blau =    (0,0,255)  
+helblau=  (99,184,255) 
+gelb =    (200,255,0)
+goldgelb =(255,215,0) 
+pink =    (255,0,255)  
+türkis =  (30,150,100)
+weiss =   (255,250,205)
+blank =   (0,0,0)                # Farbeinstellung für die nicht aktivierten LEDs
+
+porta = 0                        # Anschlussport des LED Strips GP0 an Anschulss 1
+brightness = 1                   # 0.1 bis 1 Hellgkeit
+
+machine.Pin(25,machine.Pin.OUT).value(1)#Kontroll LED auf dem Board einstellen/zuweisen und einschalten
+                       
+@rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, out_shiftdir=rp2.PIO.SHIFT_LEFT,
+             autopull=True, pull_thresh=24) # PIO configuration
+
+# define WS2812 parameters
+def ws2812():
+    T1 = 2
+    T2 = 5
+    T3 = 3
+    wrap_target()
+    label("bitloop")
+    out(x, 1)               .side(0)    [T3 - 1]
+    jmp(not_x, "do_zero")   .side(1)    [T1 - 1]
+    jmp("bitloop")          .side(1)    [T2 - 1]
+    label("do_zero")
+    nop()                   .side(0)    [T2 - 1]
+    wrap()
+
+
+# Create the StateMachine with the ws2812 program, outputting on pre-defined pin
+# at the 8MHz frequency
+state_mach = rp2.StateMachine(0, ws2812, freq=8_000_000, sideset_base=machine.Pin(porta))
+
+# Activate the state machine
+state_mach.active(1)
+
+# Range of LEDs stored in an array
+pixel_array = array.array("I", [0 for _ in range(led_anzahl)])
+#
+
+def update_pix(brightness_input=brightness): # dimming colors and updating state machine (state_mach)
+    dimmer_array = array.array("I", [0 for _ in range(led_anzahl)])
+    for ii,cc in enumerate(pixel_array):
+        r = int(((cc >> 8) & 0xFF) * brightness_input) # 8-bit red dimmed to brightness
+        g = int(((cc >> 16) & 0xFF) * brightness_input) # 8-bit green dimmed to brightness
+        b = int((cc & 0xFF) * brightness_input) # 8-bit blue dimmed to brightness
+        dimmer_array[ii] = (g<<16) + (r<<8) + b # 24-bit color dimmed to brightness
+    state_mach.put(dimmer_array, 8) # update the state machine with new colors
+    utime.sleep_ms(10)
+
+def set_24bit(ii, color): # set colors to 24-bit format inside pixel_array
+    pixel_array[ii] = (color[1]<<16) + (color[0]<<8) + color[2] # set 24-bit color
+
+
+while True:                    #Hauptprogramm
+    
+    ma=round((eingangsspannung.read_u16()*umrechnungsfaktor))  #Runden der Eingangsspannung von ADC 26 im 16 Bit format * umr.
+    utime.sleep(0.02)                                          
+    mb=round((eingangsspannung.read_u16()*umrechnungsfaktor))
+    utime.sleep(0.02)
+    mc=round((eingangsspannung.read_u16()*umrechnungsfaktor))
+    pegel=round(((ma+mb+mc)/3)*kf)                             #und einfachen Mittelwert bilden   
+    
+    if pegel >=led_anzahl: pegel =led_anzahl
+    for a in range(led_anzahl):                    #Schleife bis zur LED Länge
+                     set_24bit(a,blank)           # Alle LEDs auf Farbe"blank" stellen
+                 
+                     if ((a<=(pegel-1))& (a < led_anzahl)):    # Stelle alle LEDs die unter a+Pegel auf Farbe Color 
+                         if (98 <= a <=100 ):
+                             set_24bit(a,pink) 
+                         if (90 <= a <=97 ):
+                             set_24bit(a,rot)     
+                         if (82<=(a) <= 89):
+                             set_24bit(a,orange)               
+                         if (76<=(a)<= 82):
+                             set_24bit(a,goldgelb)
+                         if (55 <= a <=75 ):
+                             set_24bit(a,gelb) 
+                         if (38 <= a <=54 ):
+                             set_24bit(a,grün)  
+                         if (20 <= a <= 37):
+                             set_24bit(a,hellgrün) 
+                         if (10 <= a <= 19):
+                             set_24bit(a,türkis)
+                         if (0 <= a <=9 ):
+                             set_24bit(a,blau) 
+                      
+    if (wert>pegel):              # es wird der Max Pegel gesetzt
+        set_24bit((wert-1),weiss)  
+          
+    update_pix()                  # LEDs beschreiben
+    if pegel >wert : halte =40    # wenn der Pegel über dem Max liegt löschen
+    halte=halte+1                 # Zeitschleife für den Maxwert
+    if halte >20 :
+      halte = 0
+      wert=pegel 
+    print(eingangsspannung.read_u16()*umrechnungsfaktor)
+    #print (pegel)
+    #print ( "   ", ma)      # 
+    #print ( "     ", mb)
+    #print ( "        " ,mc) 
+    #utime.sleep(2)
